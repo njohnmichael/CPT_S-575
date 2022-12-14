@@ -1,0 +1,438 @@
+---
+title: "CPT_S 575 Project"
+author: "Najarian & Shatanawi"
+date: "2022-12-04"
+output:
+  html_document:
+    df_print: paged
+---
+
+# Load data and libraries
+```{r,echo = TRUE}
+library(readxl)
+columbia_river_flow_data_2015_2022 <- read_excel("C:/Users/johnn/OneDrive - Washington State University (email.wsu.edu)/Classes/CPT_S 575/Project/Data_science_Project_to john/columbia_river_flow_data_2015-2022.xlsx")
+View(columbia_river_flow_data_2015_2022)
+
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+#install.packages("imputeTS")
+library(imputeTS)
+
+```
+
+# Clean Data
+## Fill Missing Vlaues
+```{r,echo = TRUE}
+#Inflow
+Rocky_Reach_Inflow <- c(na_ma(columbia_river_flow_data_2015_2022$Rocky_Reach_Inflow, k = 1))
+Rock_Island_Inflow <- c(na_ma(columbia_river_flow_data_2015_2022$Rock_Island_Inflow, k = 1))
+
+#Discharge
+Rocky_Reach_Total_Discharge <- c(na_ma(columbia_river_flow_data_2015_2022$Rocky_Reach_Total_Discharge, k = 1))
+Rock_Island_Total_Discharge <- c(na_ma(columbia_river_flow_data_2015_2022$Rock_Island_Total_Discharge, k = 1))
+
+#Headwaters
+Rocky_Reach_Headwater_Elevation <- c(na_ma(columbia_river_flow_data_2015_2022$Rocky_Reach_Headwater_Elevation, k = 1))
+Rock_Island_Headwater_Elevation <- c(na_ma(columbia_river_flow_data_2015_2022$Rock_Island_Headwater_Elevation, k = 1))
+
+#Time
+datetime_utc <- columbia_river_flow_data_2015_2022$datetime_utc
+datetime_stamp <- columbia_river_flow_data_2015_2022$datetime_stamp
+
+#Construct clean Matrix
+Clean_CR_FlowData <- data.frame(datetime_utc, datetime_stamp, Rocky_Reach_Inflow, Rock_Island_Inflow, Rocky_Reach_Total_Discharge, Rock_Island_Total_Discharge, Rocky_Reach_Headwater_Elevation, Rock_Island_Headwater_Elevation)
+
+#Netflow = inflow-discharge
+Clean_CR_FlowData$Rocky_Reach_Netflow <- c(Rocky_Reach_Inflow-Rocky_Reach_Total_Discharge)
+Clean_CR_FlowData$Rock_Island_Netflow <- c(Rock_Island_Inflow-Rock_Island_Total_Discharge)
+
+```
+
+## Removing Feb. 29th
+```{r,echo = TRUE}
+Clean_CR_FlowData <- separate(Clean_CR_FlowData, col=datetime_stamp, into=c('year', 'month', 'day'), sep='-')
+Clean_CR_FlowData <- separate(Clean_CR_FlowData, col=day, into=c('day', 'time'), sep=' ')
+Clean_CR_FlowData = filter(Clean_CR_FlowData,!month =='02' & !day == '29')
+```
+
+## Splitting up data by year
+```{r,echo = TRUE}
+data_2015 <- filter(Clean_CR_FlowData, grepl('2015',datetime_utc)) #missing some from JAN
+data_2016 <- filter(Clean_CR_FlowData, grepl('2016',datetime_utc)) #leap year
+data_2017 <- filter(Clean_CR_FlowData, grepl('2017',datetime_utc)) #normal year 
+data_2018 <- filter(Clean_CR_FlowData, grepl('2018',datetime_utc)) #normal year
+data_2019 <- filter(Clean_CR_FlowData, grepl('2019',datetime_utc)) #normal year
+data_2020 <- filter(Clean_CR_FlowData, grepl('2020',datetime_utc)) #leap year
+```
+2015 - Incomplete set 
+2016 - Training set 
+2017 - Training set 
+2018 - Training set 
+2019 - Training set 
+2020 - Test set
+
+# Modeling Inflow
+## Identifying what degree of polynomial is best suited for Time vs Inflow
+```{r,echo = TRUE}
+degree <- 10
+mse = data.frame(data=NA,nrow=degree,ncol=4)
+
+for (i in 1:degree){
+        #2016 vs 2020
+        fit.train = lm(Rocky_Reach_Inflow ~ poly(c(1:93888),i), data=data_2016)
+        fit.test = predict(fit.train)
+        mse[i,1] = mean((fit.test-data_2020$Rocky_Reach_Inflow)^2) 
+        
+        #2017 vs 2020
+        fit.train = lm(Rocky_Reach_Inflow ~ poly(c(1:93888),i), data=data_2017)
+        fit.test = predict(fit.train)
+        mse[i,2] = mean((fit.test-data_2020$Rocky_Reach_Inflow)^2)  
+        
+        #2018 vs 2020
+        fit.train = lm(Rocky_Reach_Inflow ~ poly(c(1:93888),i), data=data_2018)
+        fit.test = predict(fit.train)
+        mse[i,3] = mean((fit.test-data_2020$Rocky_Reach_Inflow)^2) 
+        
+        #2019 vs 2020
+        fit.train = lm(Rocky_Reach_Inflow ~ poly(c(1:93888),i), data=data_2019)
+        fit.test = predict(fit.train)
+        mse[i,4] = mean((fit.test-data_2020$Rocky_Reach_Inflow)^2) 
+}
+
+#Rename mse dataframe column names
+colnames(mse)[1] = "MSE_2016" 
+colnames(mse)[2] = "MSE_2017" 
+colnames(mse)[3] = "MSE_2018" 
+colnames(mse)[4] = "MSE_2019" 
+
+#Adding a degree polynomial column 
+mse$degree <- c(1:degree)
+
+ggplot(mse, aes(x=degree)) +  
+  geom_line(aes(y = MSE_2016, col = "2016")) + 
+  geom_line(aes(y = MSE_2017, col = "2017")) + 
+  geom_line(aes(y = MSE_2018, col = "2018")) + 
+  geom_line(aes(y = MSE_2019, col = "2019")) +
+    scale_x_continuous(breaks = c(1:degree))+
+  xlab("Degree of Polynomial")+
+  ylab("Mean Squared Error")+
+  guides(color = guide_legend(title = "Year"))+
+  theme(axis.text.y=element_blank(),
+        axis.ticks.y=element_blank())
+mse
+```
+
+## Plotting 5th Degree Polynomials for Time vs Inflow
+```{r,echo = TRUE}
+Time_Inflow_Model_2016 = lm(Rocky_Reach_Inflow ~ poly(c(1:93888),5), data=data_2016)
+ggplot(data_2016, aes(c(1:93888), Rocky_Reach_Inflow)) +
+  geom_point(size = .01, color = 1, shape = 1)+
+  ggtitle("Time vs Inflow - Rocky Reach Dam - 2016")+
+  xlab("Time")+
+  ylab("Inflow (Kcfs)")+
+  theme(axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())+
+  stat_smooth(method = "lm",
+              formula = y ~ poly(x, 5),
+              se = FALSE)
+Time_Inflow_Model_2017 = lm(Rocky_Reach_Inflow ~ poly(c(1:93888),5), data=data_2017)
+ggplot(data_2017, aes(c(1:93888), Rocky_Reach_Inflow)) +
+  geom_point(size = .01, color = 1, shape = 1)+
+  ggtitle("Time vs Inflow - Rocky Reach Dam - 2017")+
+  xlab("Time")+
+  ylab("Inflow (Kcfs)")+
+  theme(axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())+
+  stat_smooth(method = "lm",
+              formula = y ~ poly(x, 5),
+              se = FALSE)
+Time_Inflow_Model_2018 = lm(Rocky_Reach_Inflow ~ poly(c(1:93888),5), data=data_2018)
+ggplot(data_2018, aes(c(1:93888), Rocky_Reach_Inflow)) +
+  geom_point(size = .01, color = 1, shape = 1)+
+  ggtitle("Time vs Inflow - Rocky Reach Dam - 2018")+
+  xlab("Time")+
+  ylab("Inflow (Kcfs)")+
+  theme(axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())+
+  stat_smooth(method = "lm",
+              formula = y ~ poly(x, 5),
+              se = FALSE)
+Time_Inflow_Model_2019 = lm(Rocky_Reach_Inflow ~ poly(c(1:93888),5), data=data_2019)
+ggplot(data_2019, aes(c(1:93888), Rocky_Reach_Inflow)) +
+  geom_point(size = .01, color = 1, shape = 1)+
+  ggtitle("Time vs Inflow - Rocky Reach Dam - 2019")+
+  xlab("Time")+
+  ylab("Inflow (Kcfs)")+
+  theme(axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())+
+  stat_smooth(method = "lm",
+              formula = y ~ poly(x, 5),
+              se = FALSE)
+```
+
+# Modeling Headwater
+## Identifying what degree of polynomial is best suited for Inflow vs Headwater
+```{r,echo = TRUE}
+degree <- 10
+mse = data.frame(data=NA,nrow=degree,ncol=4)
+
+for (i in 1:degree){
+        #2016 vs 2020
+        fit.train = lm(Rocky_Reach_Headwater_Elevation ~ poly(Rocky_Reach_Inflow,i), data=data_2016)
+        fit.test = predict(fit.train, newdata=data_2020)
+        mse[i,1] = mean((fit.test-data_2020$Rocky_Reach_Headwater_Elevation)^2) 
+        
+        #2017 vs 2020
+        fit.train = lm(Rocky_Reach_Headwater_Elevation ~ poly(Rocky_Reach_Inflow,i), data=data_2017)
+        fit.test = predict(fit.train, newdata=data_2020)
+        mse[i,2] = mean((fit.test-data_2020$Rocky_Reach_Headwater_Elevation)^2)  
+        
+        #2018 vs 2020
+        fit.train = lm(Rocky_Reach_Headwater_Elevation ~ poly(Rocky_Reach_Inflow,i), data=data_2018)
+        fit.test = predict(fit.train, newdata=data_2020)
+        mse[i,3] = mean((fit.test-data_2020$Rocky_Reach_Headwater_Elevation)^2) 
+        
+        #2019 vs 2020
+        fit.train = lm(Rocky_Reach_Headwater_Elevation ~ poly(Rocky_Reach_Inflow,i), data=data_2019)
+        fit.test = predict(fit.train, newdata=data_2020)
+        mse[i,4] = mean((fit.test-data_2020$Rocky_Reach_Headwater_Elevation)^2) 
+}
+
+#Rename mse dataframe column names
+colnames(mse)[1] = "MSE_2016" 
+colnames(mse)[2] = "MSE_2017" 
+colnames(mse)[3] = "MSE_2018" 
+colnames(mse)[4] = "MSE_2019" 
+
+#Adding a degree polynomial column 
+mse$degree <- c(1:degree)
+
+ggplot(mse, aes(x=degree)) +  
+  geom_line(aes(y = MSE_2016, col = "2016")) + 
+  geom_line(aes(y = MSE_2017, col = "2017")) + 
+  geom_line(aes(y = MSE_2018, col = "2018")) + 
+  geom_line(aes(y = MSE_2019, col = "2019")) +
+  ylim(0.2,.7) +
+  xlim(0,10)+ 
+  scale_x_continuous(breaks = c(1:degree))+
+  xlab("Degree of Polynomial")+
+  ylab("Mean Squared Error")+
+  guides(color = guide_legend(title = "Year"))
+
+mse
+```
+
+## Plot Inflow vs Headwater with linear regression
+```{r,echo = TRUE}
+Inflow_Headwater_2016 <- ggplot(data_2016, aes(x=Rocky_Reach_Inflow,y = Rocky_Reach_Headwater_Elevation)) + 
+  geom_point(size = .01, color = 1, shape = 1) +
+  ylim(700, 710)+
+  xlim(0, 250)+
+  geom_smooth(method='lm')+
+  ggtitle("Inflow vs Headwater- Rocky Reach Dam - 2016")+
+  xlab("Inflow (kcfs)")+
+  ylab("Headwater (ft)")
+Inflow_Headwater_2016
+
+Inflow_Headwater_2017 <- ggplot(data_2017, aes(x=Rocky_Reach_Inflow,y = Rocky_Reach_Headwater_Elevation)) + 
+  geom_point(size = .01, color = 1, shape = 1) +
+  ylim(700, 710)+
+  xlim(0, 250)+
+  geom_smooth(method='lm')+
+  ggtitle("Inflow vs Headwater- Rocky Reach Dam - 2017")+
+  xlab("Inflow (kcfs)")+
+  ylab("Headwater (ft)")
+Inflow_Headwater_2017
+
+Inflow_Headwater_2018 <- ggplot(data_2018, aes(x=Rocky_Reach_Inflow,y = Rocky_Reach_Headwater_Elevation)) + 
+  geom_point(size = .01, color = 1, shape = 1) +
+  ylim(700, 710)+
+  xlim(0, 250)+
+  geom_smooth(method='lm')+
+  ggtitle("Inflow vs Headwater- Rocky Reach Dam - 2018")+
+  xlab("Inflow (kcfs)")+
+  ylab("Headwater (ft)")
+Inflow_Headwater_2018
+
+Inflow_Headwater_2019 <- ggplot(data_2019, aes(x=Rocky_Reach_Inflow,y = Rocky_Reach_Headwater_Elevation)) + 
+  geom_point(size = .01, color = 1, shape = 1) +
+  ylim(700, 710)+
+  xlim(0, 250)+
+  geom_smooth(method='lm')+
+  ggtitle("Inflow vs Headwater- Rocky Reach Dam - 2019")+
+  xlab("Inflow (kcfs)")+
+  ylab("Headwater (ft)")
+Inflow_Headwater_2019
+```
+
+# Modeling Discharge
+## Identifying what degree of polynomial is best suited for Headwater vs Discharge
+```{r,echo = TRUE}
+degree <- 10
+mse = data.frame(data=NA,nrow=degree,ncol=4)
+
+for (i in 1:degree){
+        #2016 vs 2020
+        fit.train = lm(Rocky_Reach_Total_Discharge ~ poly(Rocky_Reach_Headwater_Elevation,i), data=data_2016)
+        fit.test = predict(fit.train, newdata=data_2020)
+        mse[i,1] = mean((fit.test-data_2020$Rocky_Reach_Total_Discharge)^2) 
+        
+        #2017 vs 2020
+        fit.train = lm(Rocky_Reach_Total_Discharge ~ poly(Rocky_Reach_Headwater_Elevation,i), data=data_2017)
+        fit.test = predict(fit.train, newdata=data_2020)
+        mse[i,2] = mean((fit.test-data_2020$Rocky_Reach_Total_Discharge)^2)   
+        
+        #2018 vs 2020
+       fit.train = lm(Rocky_Reach_Total_Discharge ~ poly(Rocky_Reach_Headwater_Elevation,i), data=data_2018)
+        fit.test = predict(fit.train, newdata=data_2020)
+        mse[i,3] = mean((fit.test-data_2020$Rocky_Reach_Total_Discharge)^2) 
+        
+        #2019 vs 2020
+        fit.train = lm(Rocky_Reach_Total_Discharge ~ poly(Rocky_Reach_Headwater_Elevation,i), data=data_2019)
+        fit.test = predict(fit.train, newdata=data_2020)
+        mse[i,4] = mean((fit.test-data_2020$Rocky_Reach_Total_Discharge)^2) 
+}
+
+#Rename mse dataframe column names
+colnames(mse)[1] = "MSE_2016" 
+colnames(mse)[2] = "MSE_2017" 
+colnames(mse)[3] = "MSE_2018" 
+colnames(mse)[4] = "MSE_2019" 
+
+#Adding a degree polynomial column 
+mse$degree <- c(1:degree)
+
+ggplot(mse, aes(x=degree)) +  
+  geom_line(aes(y = MSE_2016, col = "2016")) + 
+  geom_line(aes(y = MSE_2017, col = "2017")) + 
+  geom_line(aes(y = MSE_2018, col = "2018")) + 
+  geom_line(aes(y = MSE_2019, col = "2019")) +
+    scale_x_continuous(breaks = c(1:degree))+
+  xlab("Degree of Polynomial")+
+  ylab("Mean Squared Error")+
+  guides(color = guide_legend(title = "Year"))+
+  theme(axis.text.y=element_blank(),
+        axis.ticks.y=element_blank())
+mse
+```
+
+## Plotting 5th Degree Polynomials for Headwater vs Discharge
+```{r,echo = TRUE}
+ggplot(data_2016, aes(x = Rocky_Reach_Headwater_Elevation,y = Rocky_Reach_Total_Discharge))+
+  geom_point(size = .01, color = 1, shape = 1) +
+  ggtitle("Headwater vs Discharge - Rocky Reach Dam - 2016")+
+  xlab("Headwater")+
+  ylab("Discharge")+
+  ylim(0, 250)+
+  xlim(700, 710)+
+  stat_smooth(method = "lm",
+              formula = y ~ poly(x, 1),
+              se = FALSE)
+
+ggplot(data_2017, aes(x = Rocky_Reach_Headwater_Elevation,y = Rocky_Reach_Total_Discharge))+
+  geom_point(size = .01, color = 1, shape = 1) +
+  ggtitle("Headwater vs Discharge - Rocky Reach Dam - 2017")+
+  xlab("Headwater")+
+  ylab("Discharge")+
+  ylim(0, 250)+
+  xlim(700, 710)+
+  stat_smooth(method = "lm",
+              formula = y ~ poly(x, 1),
+              se = FALSE)
+
+ggplot(data_2018, aes(x = Rocky_Reach_Headwater_Elevation,y = Rocky_Reach_Total_Discharge))+
+  geom_point(size = .01, color = 1, shape = 1) +
+  ggtitle("Headwater vs Discharge - Rocky Reach Dam - 2018")+
+  xlab("Headwater")+
+  ylab("Discharge")+
+  ylim(0, 250)+
+  xlim(700, 710)+
+  stat_smooth(method = "lm",
+              formula = y ~ poly(x, 1),
+              se = FALSE)
+
+ggplot(data_2019, aes(x = Rocky_Reach_Headwater_Elevation,y = Rocky_Reach_Total_Discharge))+
+  geom_point(size = .01, color = 1, shape = 1) +
+  ggtitle("Headwater vs Discharge - Rocky Reach Dam - 2019")+
+  xlab("Headwater")+
+  ylab("Discharge")+
+  ylim(0, 250)+
+  xlim(700, 710)+
+  stat_smooth(method = "lm",
+              formula = y ~ poly(x, 1),
+              se = FALSE)
+```
+
+## Solving for 2020 Discharge 
+```{r,echo = TRUE}
+#2016 Modeled Discharges
+Inflow_Model_2016 <- lm(Rocky_Reach_Inflow ~ poly(c(1:93888),5), data=data_2020)
+Modeled_Inflows_2016 <- data.frame(predict(Inflow_Model_2016))
+colnames(Modeled_Inflows_2016)[1] = "Modeled_Inflows"
+Headwater_Model_2016 <- lm(data_2016$Rocky_Reach_Headwater_Elevation ~ Modeled_Inflows_2016$Modeled_Inflows)
+Modeled_Headwaters_2016 <- data.frame(predict(Headwater_Model_2016))
+colnames(Modeled_Headwaters_2016)[1] = "Modeled_Headwaters"
+Discharge_Model_2016 <- lm(data_2016$Rocky_Reach_Total_Discharge ~ Modeled_Headwaters_2016$Modeled_Headwaters)
+Modeled_Discharges_2016 <- data.frame(predict(Discharge_Model_2016))
+colnames(Modeled_Discharges_2016)[1] = "Modeled_Discharges"
+
+#2017 Modeled Discharges
+Inflow_Model_2017 <- lm(Rocky_Reach_Inflow ~ poly(c(1:93888),5), data=data_2020)
+Modeled_Inflows_2017 <- data.frame(predict(Inflow_Model_2017))
+colnames(Modeled_Inflows_2017)[1] = "Modeled_Inflows"
+Headwater_Model_2017 <- lm(data_2017$Rocky_Reach_Headwater_Elevation ~ Modeled_Inflows_2017$Modeled_Inflows)
+Modeled_Headwaters_2017 <- data.frame(predict(Headwater_Model_2017))
+colnames(Modeled_Headwaters_2017)[1] = "Modeled_Headwaters"
+Discharge_Model_2017 <- lm(data_2017$Rocky_Reach_Total_Discharge ~ Modeled_Headwaters_2017$Modeled_Headwaters)
+Modeled_Discharges_2017 <- data.frame(predict(Discharge_Model_2017))
+colnames(Modeled_Discharges_2017)[1] = "Modeled_Discharges"
+
+#2018 Modeled Discharges
+Inflow_Model_2018 <- lm(Rocky_Reach_Inflow ~ poly(c(1:93888),5), data=data_2020)
+Modeled_Inflows_2018 <- data.frame(predict(Inflow_Model_2018))
+colnames(Modeled_Inflows_2018)[1] = "Modeled_Inflows"
+Headwater_Model_2018 <- lm(data_2018$Rocky_Reach_Headwater_Elevation ~ Modeled_Inflows_2018$Modeled_Inflows)
+Modeled_Headwaters_2018 <- data.frame(predict(Headwater_Model_2018))
+colnames(Modeled_Headwaters_2018)[1] = "Modeled_Headwaters"
+Discharge_Model_2018 <- lm(data_2018$Rocky_Reach_Total_Discharge ~ Modeled_Headwaters_2018$Modeled_Headwaters)
+Modeled_Discharges_2018 <- data.frame(predict(Discharge_Model_2018))
+colnames(Modeled_Discharges_2018)[1] = "Modeled_Discharges"
+
+#2019 Modeled Discharges
+Inflow_Model_2019 <- lm(Rocky_Reach_Inflow ~ poly(c(1:93888),5), data=data_2020)
+Modeled_Inflows_2019 <- data.frame(predict(Inflow_Model_2019))
+colnames(Modeled_Inflows_2019)[1] = "Modeled_Inflows"
+Headwater_Model_2019 <- lm(data_2019$Rocky_Reach_Headwater_Elevation ~ Modeled_Inflows_2019$Modeled_Inflows)
+Modeled_Headwaters_2019 <- data.frame(predict(Headwater_Model_2019))
+colnames(Modeled_Headwaters_2019)[1] = "Modeled_Headwaters"
+Discharge_Model_2019 <- lm(data_2019$Rocky_Reach_Total_Discharge ~ Modeled_Headwaters_2019$Modeled_Headwaters)
+Modeled_Discharges_2019 <- data.frame(predict(Discharge_Model_2019))
+colnames(Modeled_Discharges_2019)[1] = "Modeled_Discharges"
+
+mse_2016 <- mean((Modeled_Discharges_2016$Modeled_Discharges-data_2020$Rocky_Reach_Total_Discharge)^2)
+mse_2017 <- mean((Modeled_Discharges_2017$Modeled_Discharges-data_2020$Rocky_Reach_Total_Discharge)^2)
+mse_2018 <- mean((Modeled_Discharges_2018$Modeled_Discharges-data_2020$Rocky_Reach_Total_Discharge)^2)
+mse_2019 <- mean((Modeled_Discharges_2019$Modeled_Discharges-data_2020$Rocky_Reach_Total_Discharge)^2)
+
+Modeled_Discharges <- data.frame(data_2020$Rocky_Reach_Total_Discharge, Modeled_Discharges_2016$Modeled_Discharges, Modeled_Discharges_2017$Modeled_Discharges, Modeled_Discharges_2018$Modeled_Discharges, Modeled_Discharges_2019$Modeled_Discharges)
+
+colnames(Modeled_Discharges)[1] = "Actual_2020"
+colnames(Modeled_Discharges)[2] = "Predicted_2020_from_2016"
+colnames(Modeled_Discharges)[3] = "Predicted_2020_from_2017"
+colnames(Modeled_Discharges)[4] = "Predicted_2020_from_2018"
+colnames(Modeled_Discharges)[5] = "Predicted_2020_from_2019"
+
+ggplot(Modeled_Discharges, aes(x=c(1:93888))) +  
+  geom_point(aes(y = Actual_2020, col = "2020"),size = .01, color = "yellow", shape = 1) + 
+  geom_line(aes(y = Predicted_2020_from_2016, col = "Predicted from 2016 Model")) + 
+  geom_line(aes(y = Predicted_2020_from_2017, col = "Predicted from 2017 Model")) + 
+  geom_line(aes(y = Predicted_2020_from_2018, col = "Predicted from 2018 Model")) + 
+  geom_line(aes(y = Predicted_2020_from_2019, col = "Predicted from 2019 Model")) +
+  xlab("Time (Jan-Dec)")+
+  ylab("Discharge (kcfs)")+
+  guides(color = guide_legend(title = ""))+
+  theme(axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+
+```
